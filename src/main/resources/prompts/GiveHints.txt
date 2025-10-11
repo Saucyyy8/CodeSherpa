@@ -7,6 +7,8 @@ Structure your response *exactly* as follows, using the provided headers. Do not
 ### Problem Statement:
 my_problem_statement
 
+### Solution To the Problem:
+my_solution
 ---
 
 ### Your Required Output Format:

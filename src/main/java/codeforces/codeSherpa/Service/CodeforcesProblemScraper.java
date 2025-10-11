@@ -7,10 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
-import org.openqa.selenium.By;
-import org.openqa.selenium.NoSuchElementException;
-import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.WebElement;
+import org.jsoup.select.Elements;
+import org.openqa.selenium.*;
 import org.openqa.selenium.support.ui.ExpectedConditions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,14 +16,15 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Logger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class CodeforcesProblemScraper {
-    private final WebDriver driver;
+    private static WebDriver driver;
     private final WebDriverWait wait;
     private final Logger logger = Logger.getLogger(CodeforcesProblemScraper.class.getName());
 
@@ -37,11 +36,13 @@ public class CodeforcesProblemScraper {
     }
     public AverageProblemSpecs problemScraper(String url) throws InterruptedException{
         try{
-
+            System.out.println("problemScraper Method");
             driver.get(url);
+            System.out.println("About to wait");
             Thread.sleep(2000);
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
-
+            System.out.println("Almost done waiting");
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(30));
+            System.out.println("Done Waiting");
             AverageProblemSpecs averageProblemSpecs = new AverageProblemSpecs();
             StringBuilder contestNo = new StringBuilder();
             boolean entered = false;
@@ -150,6 +151,7 @@ public class CodeforcesProblemScraper {
             catch (Exception e){
                 log.error("NO SAMPLE INPUT | OUTPUT ELEMENTS FOUND");
             }
+            System.out.println(averageProblem);
 
         }
         catch (ScrapingException se){
@@ -159,113 +161,180 @@ public class CodeforcesProblemScraper {
             throw new RuntimeException(e);
         }
     }
-    public List<String> editorialSolutionScraper(String url,int probNo, String ch) {
-        try{
+    public List<String> editorialSolutionScraper(String url, AverageProblemSpecs problem) {
+        try {
             driver.get(url);
-            System.out.println(probNo+" "+ch);
+
             System.out.println(url);
-            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(5));
-            WebElement tutorial = wait.until(ExpectedConditions.presenceOfElementLocated(
-                    By.xpath("//a[contains(text(),'Tutorial')]")
-            ));
 
-            String link = tutorial.getAttribute("href");
-            System.out.println("Link to tutorial is "+link);
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
 
-            List<String> result = scrapeProblem(driver,link,probNo,ch);
+            // wait for ANY tutorial anchors to be present (if none present this will time out)
+            List<WebElement> tutorials = wait.until(
+                    ExpectedConditions.presenceOfAllElementsLocatedBy(
+                            By.xpath("//a[contains(translate(., 'TUTORIAL', 'tutorial'), 'tutorial')]")
+                    )
+            );
+
+            // debug: print what we found
+            System.out.println("Found tutorial anchors: " + tutorials.size());
+            for (WebElement t : tutorials) {
+                try {
+                    System.out.println(" -> text: [" + t.getText().trim() + "], href: " + t.getAttribute("href") + ", displayed: " + t.isDisplayed());
+                } catch (StaleElementReferenceException sere) {
+                    System.out.println(" -> stale element while printing");
+                }
+            }
+
+            // Choose best candidate
+            WebElement best = null;
+            Pattern p = Pattern.compile("#\\s*(\\d+)", Pattern.CASE_INSENSITIVE); // matches "Tutorial #3"
+            int bestNum = -1;
+            boolean bestIsEn = false;
+
+            for (WebElement t : tutorials) {
+                try {
+                    if (!t.isDisplayed()) continue; // prefer visible links
+                } catch (StaleElementReferenceException sere) {
+                    continue;
+                }
+                String text = t.getText() == null ? "" : t.getText().trim();
+                String href = t.getAttribute("href") == null ? "" : t.getAttribute("href");
+
+                // prefer links that contain 'tutorial' in href (helps ignore unrelated 'Tutorial' matches)
+                if (!href.toLowerCase().contains("tutorial") && !text.toLowerCase().contains("tutorial")) {
+                    // still consider them but lower priority -- skip for now
+                    // continue;
+                }
+
+                Matcher m = p.matcher(text);
+                if (m.find()) {
+                    int num = Integer.parseInt(m.group(1));
+                    boolean isEn = text.toLowerCase().contains("(en)");
+                    if (num > bestNum || (num == bestNum && isEn && !bestIsEn)) {
+                        best = t;
+                        bestNum = num;
+                        bestIsEn = isEn;
+                    }
+                } else {
+                    // no number, but if we don't have any numbered candidate yet, consider it as fallback
+                    if (best == null) {
+                        best = t;
+                        bestNum = -1;
+                        bestIsEn = text.toLowerCase().contains("(en)");
+                    } else {
+                        // if both non-numbered, prefer one with (en)
+                        if (!bestIsEn && text.toLowerCase().contains("(en)")) {
+                            best = t;
+                            bestIsEn = true;
+                        }
+                    }
+                }
+            }
+
+            // fallback: if no visible candidate, take last element in original list
+            if (best == null && !tutorials.isEmpty()) {
+                best = tutorials.get(tutorials.size() - 1);
+            }
+
+            if (best == null) {
+                throw new ScrapingException("No tutorial links found on page.");
+            }
+
+            String link = best.getAttribute("href");
+            System.out.println("Chosen tutorial link: " + link + " (text: " + best.getText() + ")");
+
+            List<String> result = scrapeEditorial(link, problem);
             System.out.println(result);
             return result;
 
-        }
-        catch (Exception e){
-            System.out.println(Arrays.toString(e.getStackTrace()));
-            throw new ScrapingException("Error in Tutorial part of the code..");
-
+        } catch (TimeoutException te) {
+            System.out.println("Timeout waiting for tutorial links: " + te.getMessage());
+            throw new ScrapingException("No tutorial links found (timeout).");
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new ScrapingException("Error in getting the tutorial / editorial link to the code.");
         }
     }
-
-    public static List<String> scrapeProblem(WebDriver driver, String url,
-                                                       int problemNumber, String problemLetter) {
-        System.out.println("Problem Number is: "+problemNumber);
+    public static List<String> scrapeEditorial(String url, AverageProblemSpecs problem) {
         List<String> items = new ArrayList<>();
-        String targetHref = "/contest/" + problemNumber + "/problem/" + problemLetter;
-        String problemHrefPrefix = "/contest/" + problemNumber + "/problem/";
+        String problemName = problem.getProblemName().substring(problem.getProblemName().indexOf('.') + 1).trim();
+
+        System.out.println("Scraping editorial for problem: " + problemName);
 
         try {
             driver.get(url);
-            String pageSource = driver.getPageSource();
-            Document doc = Jsoup.parse(pageSource);
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(10));
+            wait.until(ExpectedConditions.presenceOfElementLocated(By.className("ttypography")));
 
-            Element problemHeader = doc.selectFirst("a[href='" + targetHref + "']");
-            if (problemHeader == null) {
-                System.out.println("Could not find problem header for " + problemNumber + problemLetter);
+            WebElement contentArea = driver.findElement(By.className("ttypography"));
+
+
+            // Find the starting element (h1, h2, h3, h4, p) that contains the problem name
+            List<WebElement> potentialHeaders = contentArea.findElements(By.xpath(".//h1 | .//h2 | .//h3 | .//h4 | .//p"));
+            WebElement startElement = null;
+            for (WebElement header : potentialHeaders) {
+                if (header.getText().contains(problemName)) {
+                    startElement = header;
+                    System.out.println("Found starting element for " + problemName + ": " + startElement.getTagName());
+                    break;
+                }
+            }
+
+            if (startElement == null) {
+                System.err.println("Could not find the starting element for problem: " + problemName);
                 return items;
             }
 
-            // start searching siblings from the header's parent
-            Element currentElement = problemHeader.parent();
+            // Get all subsequent siblings
+            List<WebElement> subsequentSiblings = startElement.findElements(By.xpath("following-sibling::*"));
 
-            while ((currentElement = currentElement.nextElementSibling()) != null) {
+            boolean scrapingStarted = false;
 
-                // STOP if we encounter any link that looks like another problem for the same contest
-                Element nextProblemAnchor = currentElement.selectFirst("a[href^=\"" + problemHrefPrefix + "\"]");
-                if (nextProblemAnchor != null) {
-                    String href = nextProblemAnchor.attr("href");
-                    if (!href.equals(targetHref)) {
-                        System.out.println("Reached a different problem (" + href + "). Stop searching.");
-                        break;
+            for (WebElement sibling : subsequentSiblings) {
+                String tagName = sibling.getTagName().toLowerCase();
+                String elementClass = sibling.getAttribute("class");
+
+                // If we encounter a spoiler, start scraping
+                if (elementClass != null && elementClass.toLowerCase().contains("spoiler")) {
+                    scrapingStarted = true;
+                    try {
+                        WebElement contentEl = sibling.findElement(By.className("spoiler-content"));
+                        String innerHtml = contentEl.getAttribute("innerHTML");
+                        if (innerHtml != null && !innerHtml.trim().isEmpty()) {
+                            Document contentDoc = Jsoup.parse(innerHtml);
+                            String cleanedText = contentDoc.text().trim();
+                            if (!cleanedText.isEmpty()) {
+                                items.add("SOLUTION: " + cleanedText);
+                                System.out.println("Added spoiler content: " + cleanedText.substring(0, Math.min(100, cleanedText.length())) + "...");
+                            }
+                        }
+                    } catch (NoSuchElementException e) {
+                        System.out.println("Spoiler content not found, skipping.");
                     }
-                }
-
-                // handle spoiler blocks
-                if (currentElement.hasClass("spoiler")) {
-                    Element spoilerTitle = currentElement.selectFirst(".spoiler-title");
-                    String titleText = spoilerTitle != null ? spoilerTitle.text().toLowerCase() : "";
-
-                    Element content = currentElement.selectFirst(".spoiler-content");
-                    if (content == null) continue;
-
-                    // 1) extract math (MathJax script) first and remove them to avoid duplication
-                    for (Element s : content.select("script[type=math/tex]")) {
-                        String math = s.text().trim();
-                        if (!math.isEmpty()) items.add("MATH: " + math);
-                        s.remove();
-                    }
-
-
-                    // 3) remaining cleaned text
-                    String cleaned = Jsoup.parse(content.html()).text().trim();
-                    String label;
-                    if (titleText.contains("hint")) label = "HINT";
-                    else if (titleText.contains("editorial")) label = "EDITORIAL";
-                    else if (titleText.contains("tutorial")) label = "TUTORIAL";
-                    else if (titleText.contains("code")) label = "CODE";
-                    else if (titleText.contains("solution") || titleText.equalsIgnoreCase("solution")) label = "SOLUTION";
-                    else label = "OTHER";
-
-                    if (!cleaned.isEmpty()) items.add(label + ": " + cleaned);
-
-                    // if we just captured a solution, stop (you asked to capture all occurrences but stop after solution)
-                    if ("CODE".equals(label)) {
-                        System.out.println("Found Solution — finishing collection.");
+                } else if (scrapingStarted && tagName.equals("p")) {
+                    // If we have started scraping and we encounter a <p> tag, stop.
+                    System.out.println("Encountered a <p> tag after scraping started. Stopping.");
+                    break;
+                } else if (scrapingStarted && (tagName.startsWith("h") || tagName.equals("p"))) {
+                    // also break if we find a new problem header
+                    if(sibling.getText().matches("^[A-Z]\\.\\s.*$")){
+                        System.out.println("Encountered a new problem header. Stopping.");
                         break;
                     }
 
-                    // continue scanning for more spoilers belonging to the same problem
-                    continue;
                 }
-
-                // (Optional) if you want to capture non-spoiler textual blocks too:
-                // You could add logic here to capture plain paragraphs until next problem.
             }
 
+            System.out.println("Scraping finished. Final items count: " + items.size());
+
         } catch (Exception e) {
+            System.err.println("An error occurred during editorial scraping: " + e.getMessage());
             e.printStackTrace();
         }
 
         return items;
     }
-
     public static String formatMathString(String rawText) {
         String cleanedText = rawText;
 

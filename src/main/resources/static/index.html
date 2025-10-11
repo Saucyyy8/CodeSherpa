@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeSherpa - AI Coding Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🏔️ CodeSherpa</h1>
+        <p>Your AI companion for conquering Codeforces problems. Paste a URL to get started.</p>
+        <div class="input-group">
+            <input type="text" id="urlInput" placeholder="e.g., https://codeforces.com/contest/1985/problem/H1" value="https://codeforces.com/contest/1985/problem/H1">
+            <button id="getHintsButton">Get Hints</button>
+        </div>
+        <div id="loader" class="loader hidden"></div>
+        <div id="results" class="results-container hidden">
+            <div id="buttons-container" class="buttons-container"></div>
+            <div id="content-display" class="content-display"></div>
+        </div>
+        <div id="error" class="error-message hidden"></div>
+    </div>
+
+    <!-- Chatbot Container -->
+    <div class="chatbot-container">
+        <div class="chatbot-header">
+            Chat with Sherpa
+        </div>
+        <div class="chatbot-messages" id="chatbotMessages">
+            <!-- Messages will be appended here -->
+        </div>
+        <div class="chatbot-input">
+            <input type="text" id="chatbotInput" placeholder="Ask a follow-up question...">
+            <button id="chatbotSendButton">Send</button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+    <script src="chatbot.js"></script> <!-- New script for chatbot -->
+</body>
+</html>
